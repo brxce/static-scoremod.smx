@@ -39,8 +39,9 @@
 
 new	TEMP_HEALTH_MULTIPLIER 	= 1; //having a multiplier of x1 simplifies the numbers of all the types of temp health
 new STARTING_PILL_BONUS		= 50; //for survivors to lose; applies to starting four pills only
-new	SCAVENGED_PILL_PENALTY	= 50; //fast movement is its own reward, granting bonus for scavenged pills makes for a convoluted system
+new	PILL_CONSUMPTION_PENALTY	= 50; //fast movement is its own reward, granting bonus for scavenged pills makes for a convoluted system
 new	INCAP_HEALTH			= 30; //this for survivors to lose, and also handily accounts for the 30 temp health gained when revived
+new INCAP_PENALTY			= 30;
 new	MAX_INCAPS				= 2;
 new	TOTAL_INCAP_HEALTH		= 60;//@ fix to use INCAP_HEALTH * MAX_INCAPS;
 new	MAX_HEALTH				= 100;
@@ -78,26 +79,26 @@ new Handle:hCvarTieBreaker; //used to remove tiebreaker points
 */
 
 public Plugin:myinfo = {
-	name = "PIT Scoremod",
+	name = "Newteee's Scoremod",
 	author = "Newteee, Breezy",
-	description = "A scoremod based on permanent, incap and temporary health bonus",
+	description = "A health bonus scoremod",
 	version = "1.0",
 	url = "https://github.com/breezyplease/pit-scoremod"
 };
 
 public OnPluginStart() {
 	#if SM_DEBUG
-		PrintToChatAll("Scoremod started.");
+		PrintToChatAll("OnPluginStart()");
 	#endif
 	//Changing console variables
 	hCvarSurvivalBonus = FindConVar("vs_survival_bonus");
 	hCvarTieBreaker = FindConVar("vs_tiebreak_bonus");
 	
 	//.cfg variable
-	hCVarPermHealthMultiplier = CreateConVar("perm_health_multiplier", "1.5", "Multiplier for permanent health");
-	
+	hCVarPermHealthMultiplier = CreateConVar("perm_health_multiplier", "1.5", "Multiplier for permanent health", FCVAR_PLUGIN);
+
 	//Hooking game events to plugin functions
-	HookEvent("round_start", EventHook:OnRoundStart, EventHookMode_PostNoCopy);
+	HookEvent("versus_round_start", EventHook:OnVersusRoundStart, EventHookMode_PostNoCopy);
 	HookEvent("pills_used", EventHook:OnPillsUsed, EventHookMode_PostNoCopy);
 	
 	//In-game "sm_/!" prefixed commands to call CmdBonus() function
@@ -110,15 +111,18 @@ public OnPluginStart() {
 
 public OnConfigsExecuted() {
 	SetConVarInt(hCvarTieBreaker, 0);
-	iTeamSize = GetConVarInt(FindConVar("survivor_limit"));
+	iTeamSize = GetConVarInt( FindConVar("survivor_limit") );
 	new iDistance = L4D2_GetMapValueInt( "max_distance", L4D_GetVersusMaxCompletionScore() );
 	fMapDistance = float(iDistance);
 	#if SM_DEBUG
-		PrintToChatAll("Map distance: %d", fMapDistance);
+		PrintToChatAll("OnConfigsExecuted()");
 	#endif
 }
 
-public OnRoundStart() {
+public OnVersusRoundStart() {
+	#if SM_DEBUG
+	PrintToChatAll("OnVersusRoundStart()");
+	#endif
 	iPillsConsumed = 0;
 	fMapBonus = CalculateBonusScore();
 	bIsRoundOver = false;
@@ -146,7 +150,7 @@ public Action:L4D2_OnEndVersusModeRound() { //bool:countSurvivors could possibly
 		PrintToChatAll("Bonus depleted");
 	}
 	//Set score (L4D2 awards bonus on a per survivor basis -> divide calculated bonus by number of standing survivors)
-	SetConvarInt(hCvarSurvivalBonus, RoundToFloor(fBonusScore[team]/iSurvivalMultiplier) );
+	SetConVarInt(hCvarSurvivalBonus, RoundToFloor(fBonusScore[team]/iSurvivalMultiplier) );
 	
 	// Scores print
 	CreateTimer(3.0, PrintRoundEndStats, _, TIMER_FLAG_NO_MAPCHANGE);
@@ -157,10 +161,10 @@ public Action:L4D2_OnEndVersusModeRound() { //bool:countSurvivors could possibly
 //@TODO: fix the tag mismatch errors
 public Action:PrintRoundEndStats(Handle:timer) {
 	if (bInSecondHalf == false) {
-		PrintToChatAll( "\x01[\x04SM\x01 :: Round \x031\x01] Bonus: \x05%d\x01/\x05%d\x01", RoundToFloor(fBonusScore[TEAM_ONE]), RoundToFloor(fMapBonus) );
+		PrintToChatAll( "\x01[\x04SM\x01 :: Round \x031\x01] Bonus: \x05%i\x01/\x05%i\x01", RoundToFloor(fBonusScore[TEAM_ONE]), RoundToFloor(fMapBonus) );
 		// [SM :: Round 1] Bonus: 487/1200 
 	} else {
-		PrintToChatAll( "\x01[\x04SM\x01 :: Round \x032\x01] Bonus: \x05%d\x01/\x05%d\x01", RoundToFloor(fBonusScore[TEAM_TWO]), RoundToFloor(fMapBonus) );
+		PrintToChatAll( "\x01[\x04SM\x01 :: Round \x032\x01] Bonus: \x05%i\x01/\x05%i\x01", RoundToFloor(fBonusScore[TEAM_TWO]), RoundToFloor(fMapBonus) );
 		// [SM :: Round 2] Bonus: 487/1200 
 	}
 }
@@ -176,11 +180,16 @@ public CvarChanged(Handle:convar, const String:oldValue[], const String:newValue
 
 public Action:CmdBonus(client, args) {
 	#if SM_DEBUG
-		PrintToChatAll("CmdBonus() called");
+		PrintToChatAll("CmdBonus()");
 	#endif
 	if (bIsRoundOver || !client) {
 		#if SM_DEBUG
-			PrintToChatAll("bIsRoundOver = true || !client; ");
+			PrintToChatAll("- bIsRoundOver = true || !client; ");
+			if (bIsRoundOver) {
+				PrintToChatAll("- bIsRoundOver: true ");
+			} else {
+				PrintToChatAll("- bIsRoundOver: false");
+			}			
 		#endif
 		return Plugin_Handled;
 	} else {
@@ -192,13 +201,14 @@ public Action:CmdBonus(client, args) {
 			PrintToChat( client, "\x01[\x04SM\x01 :: R\x03#2\x01] Bonus: \x05%d\x01", RoundToFloor(fBonus));
 			// [SM :: R#2] Bonus: 556
 		}	
+		return Plugin_Continue;
 	}	
 }
 
 public Action:CmdMapInfo(client, args) {
-	PrintToChat(client, "\x01[\x04SM\x01 :: \x03	%iv%i\x01] Map Info", iTeamSize, iTeamSize); // [SM :: 4v4] Map Info
+	PrintToChat(client, "\x01[\x04SM\x01 :: \x03%iv%i\x01] Map Info", iTeamSize, iTeamSize); // [SM :: 4v4] Map Info
 	PrintToChat(client, "\x01Map Distance: \x05%d\x01", fMapDistance);
-	PrintToChat(client, "\x01Map Multiplier: \x05%d\x01", GetMapMultiplier()); // Map multiplier
+	PrintToChat(client, "\x01Map Multiplier: \x05%f\x01", GetMapMultiplier()); // Map multiplier
 	PrintToChat(client, "\x01Contribution to the temp bonus pools from each survivor is as follows:");
 	PrintToChat(client, "\x01Starting pill bonus: 50");
 	PrintToChat(client, "\x01Static incap bonus: 30 per incap avoided");
@@ -221,6 +231,10 @@ CountUprightSurvivors() {
 			}
 		}
 	}
+	#if SM_DEBUG
+		PrintToChatAll("CountUprightSurvivors()");
+		PrintToChatAll("- iUprightCount: %n", iUprightCount);
+	#endif
 	return iUprightCount;
 }
 
@@ -238,31 +252,46 @@ bool:IsPlayerLedged(client)
 }
 
 Float:CalculateBonusScore() {// Apply map multiplier to the sum of the permanent and temporary health bonuses
+	#if SM_DEBUG
+		PrintToChatAll("CalculateBonusScore()");
+		PrintToChatAll(" ");
+	#endif
 	new Float:fPermBonus = GetPermBonus();
 	new Float:fTempBonus = GetTempBonus();
 	new Float:fMapMultiplier = GetMapMultiplier();
 	new Float:fHealth = fPermBonus + fTempBonus;
 	new Float:fHealthBonus = fHealth * fMapMultiplier;
+	#if SM_DEBUG
+		PrintToChatAll("- fHealthBonus: %f", fHealthBonus);
+	#endif
 	return fHealthBonus;
 }
 
 // Permanent health held * multiplier (1.5 by default)
 Float:GetPermBonus() { 
 	new iPermHealth = 0;
+	#if SM_DEBUG
+		PrintToChatAll("GetPermBonus()");
+		PrintToChatAll("- hCVarPermHealthMultiplier: %f", GetConVarFloat(hCVarPermHealthMultiplier) );
+	#endif
 	for (new index = 1; index < MaxClients; index++)
 	{
 		//Add permanent health held by each non-incapped survivor
 		if (IsSurvivor(index) /*&& !IsPlayerIncap(index)*/) {  //@todo fix IsPlayerIncap
-			if (GetEntProp(index, Prop_Send, "m_currentReviveCount") > 0 ) { //
+			if (GetEntProp(index, Prop_Send, "m_currentReviveCount") == 0 ) { //
 				if (GetEntProp(index, Prop_Send, "m_iHealth") > 0) {
 					iPermHealth += GetEntProp(index, Prop_Send, "m_iHealth");
+					#if SM_DEBUG
+						PrintToChatAll("- Found a survivor with %d perm health", GetEntProp(index, Prop_Send, "m_iHealth"));
+					#endif
 				} 
 			}
 		}
 	}		
-	new Float:fPermBonus = iPermHealth * float(hCVarPermHealthMultiplier);
+	new Float:fPermBonus = iPermHealth * GetConVarFloat(hCVarPermHealthMultiplier);
 	#if SM_DEBUG
-		PrintToChatAll("PermBonus: %f", fPermBonus);
+		PrintToChatAll("- fPermBonus: %f", fPermBonus);
+		PrintToChatAll(" ");
 	#endif
 	return (fPermBonus > 0 ? fPermBonus: 0.0);
 }
@@ -274,31 +303,60 @@ Temp bonus is the same as temp health because of the x1 TEMP_HEALTH_MULTIPLIER
 - subtract a 'scavenged pills penalty' to neutralise temp bonus gained from non-starting pills
 */
 Float:GetTempBonus() { 
-	new iTempHealth = 0;
+	#if SM_DEBUG
+		PrintToChatAll("GetTempBonus()");
+	#endif
+	new iTempHealthPool = 0; //the team's collective temp health pool
 	new iIncapsSuffered = 0; 
-	new iScavengedPillsEaten = ( (iPillsConsumed - iTeamSize) > 0 ? (iPillsConsumed - iTeamSize):0 );
 	for (new index = 1; index < MaxClients; index++) {
-		iIncapsSuffered += GetEntProp(index, Prop_Send, "m_currentReviveCount"); 
 		if (IsSurvivor(index) /*@todo, fix && !(isPlayerIncap(index)*/) { //Non incapped player					
-			//Add temp health held by each survivor
-			iTempHealth += RoundToCeil(GetEntPropFloat(index, Prop_Send, "m_healthBuffer") - ((GetGameTime() - GetEntPropFloat(index, Prop_Send, "m_healthBufferTime")) * GetConVarFloat(FindConVar("pain_pills_decay_rate")))) - 1;
+			iIncapsSuffered += GetEntProp(index, Prop_Send, "m_currentReviveCount"); 
+			new iThisSurvivorTempHealth = RoundToCeil(GetEntPropFloat(index, Prop_Send, "m_healthBuffer") - ((GetGameTime() - GetEntPropFloat(index, Prop_Send, "m_healthBufferTime")) * GetConVarFloat(FindConVar("pain_pills_decay_rate")))) - 1;
+			if (iThisSurvivorTempHealth > 0) {
+				//Add temp health held by each survivor
+				iTempHealthPool += iThisSurvivorTempHealth;
+				#if SM_DEBUG
+					PrintToChatAll("- Found a survivor with temp health: %i", iThisSurvivorTempHealth);
+				#endif				
+			} else {
+				#if SM_DEBUG
+				PrintToChatAll("- Found a survivor with no temp health");
+				#endif
+			}			
 		}
 	}	
-	iTempHealth+= (iTeamSize * STARTING_PILL_BONUS);
-	iTempHealth -= (iScavengedPillsEaten * SCAVENGED_PILL_PENALTY);
-	iTempHealth -= (iIncapsSuffered * INCAP_HEALTH);
-	new Float:fTempBonus = float(iTempHealth * TEMP_HEALTH_MULTIPLIER); // x1
 	#if SM_DEBUG
-		PrintToChatAll("TempBonus: %f", fTempBonus);
+		PrintToChatAll("- Total temp health held by survivors: %i", iTempHealthPool);
 	#endif
-	return (fTempBonus > 0 ? fTempBonus : 0);
+	new iStartingPillBonus = STARTING_PILL_BONUS * iTeamSize;
+	new iPillConsumptionPenalty = iPillsConsumed * PILL_CONSUMPTION_PENALTY;
+	new iIncapAvoidanceBonus = MAX_INCAPS * INCAP_HEALTH * iTeamSize;
+	new iIncapPenalty = iIncapsSuffered * INCAP_PENALTY; //INCAP_HEALTH = INCAP_PENALTY = 30
+	iTempHealthPool += iStartingPillBonus;
+	iTempHealthPool += iIncapAvoidanceBonus;
+	iTempHealthPool -= iPillConsumptionPenalty;
+	iTempHealthPool -= iIncapPenalty;
+	new Float:fTempBonus = float(iTempHealthPool * TEMP_HEALTH_MULTIPLIER); // x1
+	#if SM_DEBUG
+		PrintToChatAll("- iStartingPillBonus: %i", iStartingPillBonus);
+		PrintToChatAll("- iIncapAvoidanceBonus: %i", iIncapAvoidanceBonus);
+		PrintToChatAll("- iPillConsumptionPenalty: %i", iPillConsumptionPenalty);
+		PrintToChatAll("- iIncapPenalty: %i", iIncapPenalty);
+		PrintToChatAll("fTempBonus: %f", fTempBonus);
+		PrintToChatAll(" ");
+	#endif
+	return (fTempBonus > 0 ? fTempBonus : 0.0);
 }
 
 Float:GetMapMultiplier() { // (2 * Map Distance)/Max health bonus (1040 by default w/ 1.5 perm health multiplier)
-	new Float:fMaxPermBonus = MAX_HEALTH * float(hCVarPermHealthMultiplier);
+	#if SM_DEBUG
+		PrintToChatAll("GetMapMultiplier()");
+	#endif
+	new Float:fMaxPermBonus = MAX_HEALTH * GetConVarFloat(hCVarPermHealthMultiplier);
 	new Float:fMapMultiplier = ( 2 * fMapDistance )/( iTeamSize*(fMaxPermBonus + STARTING_PILL_BONUS + TOTAL_INCAP_HEALTH));
 	#if SM_DEBUG
-		PrintToChatAll("Map Multiplier: %f", fMapMultiplier);
+		PrintToChatAll("- fMapMultiplier: %f", fMapMultiplier);
+		PrintToChatAll(" ");
 	#endif
 	return fMapMultiplier;
 }
