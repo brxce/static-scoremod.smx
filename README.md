@@ -1,4 +1,5 @@
-# Newteee's Scoremod
+# Static Scoremod
+##Concept by Newteee, Developed by Breezy
 Permanent, Incap and Temporary health Scoremod
 >Health Bonus pool=   
 +Permanent health * multipler  
