@@ -33,7 +33,7 @@
 #define SM_DEBUG 1
 #define TEAM_ONE 0
 #define TEAM_TWO 1
-#define POSTSTART_DELAY 4.0
+#define POST_ROUNDSTART_DELAY 4.0
 
 #include <sourcemod>
 #include <sdkhooks>
@@ -88,17 +88,18 @@ public Plugin:myinfo = {
 //set incapavoidancebonus, don't use subtraction (b/c edge case of suicide/death charges)
 
 public OnPluginStart() {
+	SetConVarInt(hCvarTieBreaker, 0);
 	//Changing console variables
 	hCvarSurvivalBonus = FindConVar("vs_survival_bonus");
 	hCvarTieBreaker = FindConVar("vs_tiebreak_bonus");
-	SetConVarInt(hCvarTieBreaker, 0);
 	
 	//.cfg variable
 	hCVarPermHealthMultiplier = CreateConVar("perm_health_multiplier", "1.5", "Multiplier for permanent health", FCVAR_PLUGIN);
 
 	//Hooking game events to plugin functions
 	HookEvent("round_start", EventHook:OnRoundStart, EventHookMode_PostNoCopy); 
-	HookEvent("map_transition", EventHook:OnCoopMapEnd, EventHookMode_Pre);
+	HookEvent("map_transition", EventHook:OnCoopMapEnd, EventHookMode_Pre); //for coop
+	HookEvent("finale_vehicle_leaving", EventHook:OnFinaleFinish, EventHookMode_PostNoCopy); //for when map_transition cannot be used
 	HookEvent("pills_used", EventHook:OnPillsUsed, EventHookMode_PostNoCopy);
 	
 	//In-game "sm_/!" prefixed commands to call CmdBonus() function
@@ -130,12 +131,12 @@ public OnConfigsExecuted() {
 
 //For Coop 
 public OnRoundStart() {
-	CreateTimer(POSTSTART_DELAY, Timer_PostRoundStart, _, TIMER_FLAG_NO_MAPCHANGE);
+	CreateTimer(POST_ROUNDSTART_DELAY, Timer_PostRoundStart, _, TIMER_FLAG_NO_MAPCHANGE);
 }
 
 public Action:Timer_PostRoundStart(Handle:timer) {
 	#if SM_DEBUG
-		PrintToChatAll("----------A new round has begun!----------");
+		PrintToChatAll("iPillsConsumed reset");
 	#endif
 	CheckGameMode(); //gamemode is assumed to be non-versus; checks otherwise
 	bIsRoundOver = false;
@@ -183,10 +184,27 @@ public OnCoopMapEnd() {
 		iAccumulatedBonus += iBonusEarned;
 		SetConVarInt(hCvarTieBreaker, iAccumulatedBonus);
 		// Scores print
-		CreateTimer(3.0, PrintRoundEndStats, _, TIMER_FLAG_NO_MAPCHANGE);
+		CreateTimer(0.0, PrintRoundEndStats, _, TIMER_FLAG_NO_MAPCHANGE);
 		bIsRoundOver = true;
 	}
 }
+
+//For Coop
+public OnFinaleFinish(survivorcount) { //map_transition event does not work for last map in campaign
+	if (!bIsVersusMode) {
+		//Get the health bonus for this map
+		fBonusScore[TEAM_ONE] = CalculateBonusScore();
+		new iBonusEarned = RoundToFloor(fBonusScore[TEAM_ONE]);
+		//Use this convar to save accumulated bonus in coop; also makes the health bonus available for vscripts to access
+		new iAccumulatedBonus = GetConVarInt(hCvarTieBreaker); //was initialised to zero in OnConfigsExecuted()
+		iAccumulatedBonus += iBonusEarned;
+		SetConVarInt(hCvarTieBreaker, iAccumulatedBonus);
+		// Scores print
+		CreateTimer(0.0, PrintRoundEndStats, _, TIMER_FLAG_NO_MAPCHANGE);
+		bIsRoundOver = true;
+	}
+}
+
 public Action:PrintRoundEndStats(Handle:timer) {
 	if (bIsVersusMode) {
 		if (bInSecondHalf == false) {
@@ -201,6 +219,7 @@ public Action:PrintRoundEndStats(Handle:timer) {
 		// [SM :: Map Bonus] Bonus: 487/1200 
 		new iCurrentCampaignScore = GetConVarInt(hCvarTieBreaker);
 		PrintToChatAll("\x01[\x04SM\x01 :: Campaign Bonus] \x05%i", iCurrentCampaignScore);
+		ResetConVar(hCvarTieBreaker);
 	}
 	
 }
@@ -218,94 +237,34 @@ public Action:CmdBonus(client, args) {
 	#if SM_DEBUG
 		PrintToChatAll("CmdBonus()");
 	#endif
-	if (bIsRoundOver || !client) {
+	if (bIsRoundOver) {
 		#if SM_DEBUG
 			if (bIsRoundOver) {
 				PrintToChatAll("bIsRoundOver: true ");
-			} else {
-				PrintToChatAll("!client");
-			}			
+			}				
 		#endif
 		return Plugin_Handled;
 	} else {
-		new Float:fBonus = CalculateBonusScore();		
+		new Float:fBonus = CalculateBonusScore();	
+		new bool:bIsSilentCommand = (client > 0 ? false : true); //sm_command instead of !command chat trigger?
 		if (!bInSecondHalf) {
-			PrintToChatAll( "\x01[\x04SM\x01 :: R\x03#1\x01] Bonus: \x05%d\x01", RoundToFloor(fBonus));
-			// [SM :: R#1] Bonus: 556
+		// [SM :: R#1] Bonus: 556
+			if (bIsSilentCommand) { 
+				PrintToServer("\x01[\x04SM\x01 :: R\x03#1\x01] Bonus: \x05%d\x01", RoundToFloor(fBonus));
+			} else {
+				PrintToChat(client, "\x01[\x04SM\x01 :: R\x03#1\x01] Bonus: \x05%d\x01", RoundToFloor(fBonus));
+			}
+			
 		} else { //Print for R#2
+			if (bIsSilentCommand) {
+				PrintToServer("\x01[\x04SM\x01 :: R\x03#2\x01] Bonus: \x05%d\x01", RoundToFloor(fBonus));
+			} else {
+				PrintToChat(client, "\x01[\x04SM\x01 :: R\x03#1\x01] Bonus: \x05%d\x01", RoundToFloor(fBonus));
+			}
 			PrintToChatAll( "\x01[\x04SM\x01 :: R\x03#2\x01] Bonus: \x05%d\x01", RoundToFloor(fBonus));
-			// [SM :: R#2] Bonus: 556
 		}	
 		return Plugin_Continue;
 	}	
-}
-
-public Action:CmdInfo(client, args) {
-	PrintToChatAll( "\x03<Health bonus pool - breakdown>");
-	PrintToChatAll( "\x04Permanent health ->\x05 x1.5 \x01default multiplier");
-	PrintToChatAll( "\x01- Held perm health:		\x05100");
-	PrintToChatAll( "\x04Temporary health ->\x05 x1.0 \x01multiplier");
-	PrintToChatAll( "\x01- Held temp health:		\x05 __");
-	PrintToChatAll( "\x01- Starting pill bonus:		\x05 50");
-	PrintToChatAll( "\x01- Incap Avoidance bonus:	\x05 30 per incap avoided \x01(2 max incaps per survivor)");
-	PrintToChatAll( "\x03Each survivor contributes 100*1.5 + 50 + 60 =\x05 260 \x01bonus");
-	PrintToChatAll( "\x03 -> total 4v4 \x04starting bonus \x03of 4x260 =\x05 1040 \x01(before map multiplier)");
-	PrintToChatAll( "\x04The purpose of scavenged pills is to keep a team fast");
-	PrintToChatAll( "\x04So temp health from scavenged pills is an exception to temp health conversion into bonus");
-	PrintToChatAll( "");
-	return Plugin_Handled;
-}
-
-public Action:CmdMapInfo(client, args) {
-	PrintToChatAll( "\x01[\x04SM\x01 :: \x03%iv%i\x01] Map Info", iTeamSize, iTeamSize); // [SM :: 4v4] Map Info
-	PrintToChatAll( "\x04Map Distance: \x05%f\x01", fMapDistance);
-	PrintToChatAll( "\x04Map Multiplier: \x05%f\x01", GetMapMultiplier()); // Map multiplier
-	PrintToChatAll( "");
-	return Plugin_Handled;
-}
-
-CheckGameMode() 
-{
-    // check if it is versus
-    new String:tmpStr[24];
-    GetConVarString( FindConVar("mp_gamemode"), tmpStr, sizeof(tmpStr) );
-    if ( StrEqual(tmpStr, "versus", false) ) {
-        bIsVersusMode = true;
-    }
-}
-
-CountUprightSurvivors() {
-	new iUprightCount = 0;
-	new iSurvivorCount = 0;
-	for (new i = 1; i <= MaxClients && iSurvivorCount < iTeamSize; i++)
-	{
-		if (IsSurvivor(i))
-		{
-			iSurvivorCount++;
-			if (IsPlayerAlive(i) && !IsPlayerIncap(i) && !IsPlayerLedged(i))
-			{
-				iUprightCount++;
-			}
-		}
-	}
-	#if SM_DEBUG
-		PrintToChatAll("CountUprightSurvivors()");
-		PrintToChatAll("- iUprightCount: %i", iUprightCount);
-	#endif
-	return iUprightCount;
-}
-
-bool:IsSurvivor(client) {
-	return client > 0 && client <= MaxClients && IsClientInGame(client) && GetClientTeam(client) == 2;
-}
-
-bool:IsPlayerIncap(client) {
-	return bool:GetEntProp(client, Prop_Send, "m_isIncapacitated");
-}
-
-bool:IsPlayerLedged(client)
-{
-	return bool:(GetEntProp(client, Prop_Send, "m_isHangingFromLedge") | GetEntProp(client, Prop_Send, "m_isFallingFromLedge"));
 }
 
 Float:CalculateBonusScore() {// Apply map multiplier to the sum of the permanent and temporary health bonuses
@@ -419,4 +378,83 @@ Float:GetMapMultiplier() { // (2 * Map Distance)/Max health bonus (1040 by defau
 	#endif
 	return fMapMultiplier;
 }
+
+public Action:CmdInfo(client, args) {
+	PrintToChat(client, "\x03<Health bonus pool - breakdown>");
+	PrintToChat(client, "\x04Permanent health ->\x05 x1.5 \x01default multiplier");
+	PrintToChat(client, "\x01- Held perm health:		\x05100");
+	PrintToChat(client, "\x04Temporary health ->\x05 x1.0 \x01multiplier");
+	PrintToChat(client, "\x01- Held temp health:		\x05 __");
+	PrintToChat(client, "\x01- Starting pill bonus:		\x05 50");
+	PrintToChat(client, "\x01- Incap Avoidance bonus:	\x05 30 per incap avoided \x01(2 max incaps per survivor)");
+	PrintToChat(client, "\x03Each survivor contributes 100*1.5 + 50 + 60 =\x05 260 \x01bonus");
+	PrintToChat(client, "\x03 -> total 4v4 \x04starting bonus \x03of 4x260 =\x05 1040 \x01(before map multiplier)");
+	PrintToChat(client, "\x04The only purpose of scavenged pills is to keep a team fast");
+	PrintToChat(client, "\x04So from the fifth pill consumed onwards, no bonus is granted");
+	PrintToChat(client, "");
+	return Plugin_Handled;
+}
+
+public Action:CmdMapInfo(client, args) {
+	if (client == -1) {
+		PrintToServer("\x01[\x04SM\x01 :: \x03%iv%i\x01] Map Info", iTeamSize, iTeamSize); // [SM :: 4v4] Map Info
+		PrintToServer("\x04Map Distance: \x05%f\x01", fMapDistance);
+		PrintToServer("\x04Map Multiplier: \x05%f\x01", GetMapMultiplier()); // Map multiplier
+		PrintToServer("\x04Max bonus for this map: \x05%f", fMaxBonusForMap);
+		PrintToServer("");
+	} else {
+		PrintToChat(client, "\x01[\x04SM\x01 :: \x03%iv%i\x01] Map Info", iTeamSize, iTeamSize); // [SM :: 4v4] Map Info
+		PrintToChat(client, "\x04Map Distance: \x05%f\x01", fMapDistance);
+		PrintToChat(client, "\x04Map Multiplier: \x05%f\x01", GetMapMultiplier()); // Map multiplier
+		PrintToChat(client, "\x04Max bonus for this map: \x05%f", fMaxBonusForMap);
+		PrintToChat(client, "");
+	}
+	return Plugin_Handled;
+}
+
+CheckGameMode() 
+{
+    // check if it is versus
+    new String:tmpStr[24];
+    GetConVarString( FindConVar("mp_gamemode"), tmpStr, sizeof(tmpStr) );
+    if ( StrEqual(tmpStr, "versus", false) ) {
+        bIsVersusMode = true;
+    }
+}
+
+CountUprightSurvivors() {
+	new iUprightCount = 0;
+	new iSurvivorCount = 0;
+	for (new i = 1; i <= MaxClients && iSurvivorCount < iTeamSize; i++)
+	{
+		if (IsSurvivor(i))
+		{
+			iSurvivorCount++;
+			if (IsPlayerAlive(i) && !IsPlayerIncap(i) && !IsPlayerLedged(i))
+			{
+				iUprightCount++;
+			}
+		}
+	}
+	#if SM_DEBUG
+		PrintToChatAll("CountUprightSurvivors()");
+		PrintToChatAll("- iUprightCount: %i", iUprightCount);
+	#endif
+	return iUprightCount;
+}
+
+bool:IsSurvivor(client) {
+	return client > 0 && client <= MaxClients && IsClientInGame(client) && GetClientTeam(client) == 2;
+}
+
+bool:IsPlayerIncap(client) {
+	return bool:GetEntProp(client, Prop_Send, "m_isIncapacitated");
+}
+
+bool:IsPlayerLedged(client)
+{
+	return bool:(GetEntProp(client, Prop_Send, "m_isHangingFromLedge") | GetEntProp(client, Prop_Send, "m_isFallingFromLedge"));
+}
+
+
 	
