@@ -9,3 +9,4 @@ Permanent, Incap and Temporary health Scoremod
 >  
 +50 point penalty for each scavenged pill consumed to neutralise the temp bonus gained  
 +30 point penalty for every incap
+
