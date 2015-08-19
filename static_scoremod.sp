@@ -8,7 +8,7 @@
 	'current' by CanadaRox
 ********************************************/
 
-/*
+/*****************************************************************************************************************************************
 	HEALTH POOL: 
 		+ total perm * multipler (default 1.5)
 		+ total temp * 1 
@@ -20,7 +20,7 @@
 	| max health bonus | = { number survivors * [ (100permhealth * multiplier) + (2 incaps/survivor *30 incaphealth) + (50 pillhealth) ] }
 	
 	-> Bonus = HEALTH POOL * MAP MULTIPLIER
-*/
+*****************************************************************************************************************************************/
 
 #pragma semicolon 1
 
@@ -49,7 +49,7 @@ new bool:bIsRoundOver;
 new bool:bInVersusMode = false;
 new Float:fBonusScore[2]; //the final health bonus for the round after map multiplier has been applied
 new Float:fMaxBonusForMap;
-new Float:fMapDistance;
+new iMapDistance;
 new iTeamSize;
 new iPillsConsumed;
 //For coop
@@ -74,27 +74,27 @@ public OnPluginStart() {
 	//Changing console variables
 	hCvarSurvivalBonus = FindConVar("vs_survival_bonus");
 	hCvarTieBreaker = FindConVar("vs_tiebreak_bonus");
-	SetConVarInt(hCvarTieBreaker, 0);
+	SetConVarInt(hCvarTieBreaker, 0);	
 	
 	//.cfg variable
 	hCVarPermHealthMultiplier = CreateConVar("perm_health_multiplier", "1.5", "Multiplier for permanent health", FCVAR_PLUGIN);
+	HookConVarChange(hCVarPermHealthMultiplier, CvarChanged);
 	
 	//Hooking game events to plugin functions
 	HookEvent("round_start", EventHook:OnRoundStart, EventHookMode_PostNoCopy); 
-	HookEvent("map_transition", EventHook:OnMapTransition, EventHookMode_Pre); //for coop
-	HookEvent("finale_vehicle_leaving", EventHook:OnFinaleFinish, EventHookMode_PostNoCopy); //for when map_transition cannot be used
 	HookEvent("pills_used", EventHook:OnPillsUsed, EventHookMode_PostNoCopy);
-	HookConVarChange(hCVarPermHealthMultiplier, CvarChanged);
-	//for coop - handling distance points for dead survivors
-	HookEvent("player_death", OnPlayerDeath, EventHookMode_Pre); // retrieve their distance before they die
-	HookEvent("round_freeze_end", EventHook:OnRoundFreezeEnd, EventHookMode_PostNoCopy); // reset cache
+	//for coop
+	HookEvent("map_transition", EventHook:OnMapTransition, EventHookMode_Pre); 
+	HookEvent("mission_lost", EventHook:OnMissionLost, EventHookMode_Pre);
+	HookEvent("finale_win", EventHook:OnFinaleFinish, EventHookMode_PostNoCopy); //when map_transition cannot be used	
+	HookEvent("player_death", OnPlayerDeath, EventHookMode_Pre); // retrieve distance points before players die
+	HookEvent("round_freeze_end", EventHook:OnRoundFreezeEnd, EventHookMode_PostNoCopy); // reset coop round stats
 	
 	//In-game "sm_/!" prefixed commands to call CmdBonus() function
 	RegConsoleCmd("sm_health", CmdBonus);
-	RegConsoleCmd("sm_damage", CmdBonus);
 	RegConsoleCmd("sm_bonus", CmdBonus);
 	//Map multiplier info, etc.
-	RegConsoleCmd("sm_scoreinfo", CmdScoreInfo);
+	RegConsoleCmd("sm_scoring", CmdScoring);
 	RegConsoleCmd("sm_mapinfo", CmdMapInfo);
 	//Coop only
 	RegConsoleCmd("sm_setscore", CmdSetScore); 
@@ -103,8 +103,7 @@ public OnPluginStart() {
 public OnConfigsExecuted() {	
 	//Get game information
 	iTeamSize = GetConVarInt( FindConVar("survivor_limit") );
-	new iDistance = L4D2_GetMapValueInt( "max_distance", L4D_GetVersusMaxCompletionScore() );
-	fMapDistance = float(iDistance);
+	iMapDistance = L4D2_GetMapValueInt( "max_distance", L4D_GetVersusMaxCompletionScore() );
 	//Calculate max bonus for map
 	new Float:fPermMax = iTeamSize * MAX_HEALTH * GetConVarFloat(hCVarPermHealthMultiplier);
 	new iTempMax = iTeamSize * (STARTING_PILL_BONUS + INCAPS_BEFORE_DEATH*INCAP_HEALTH); //Starting Pill & Incap Avoidance bonuses 
@@ -113,7 +112,9 @@ public OnConfigsExecuted() {
 }
 
 /*************************************************************************************************************
+										
 										FOR ALL GAME MODES
+										
 *************************************************************************************************************/
 
 public OnRoundStart() {
@@ -122,6 +123,7 @@ public OnRoundStart() {
 	}
 	CheckGameMode(); //gamemode is assumed to be non-versus; checks otherwise
 	bInSecondHalf = bool:GameRules_GetProp("m_bInSecondHalfOfRound"); //of a versus map
+	iTeamDistancePoints = 0; // for coop
 	iPillsConsumed = 0;
 	bIsRoundOver = false;
 }
@@ -156,7 +158,7 @@ public Action:PrintRoundEndStats(Handle:timer) {
 			// [SM :: Round 2] Bonus: 487/1200 
 		}
 	} else { //print map score, and total points earned so far in this campaign
-		PrintToChatAll("\x01[\x04SM\x01 :: Distance Points] \x05%i\x01/\x05%i\x01", iTeamDistancePoints, RoundToNearest(fMapDistance));
+		PrintToChatAll("\x01[\x04SM\x01 :: Distance Points] \x05%i\x01/\x05%i\x01", iTeamDistancePoints, iMapDistance);
 		PrintToChatAll("\x01[\x04SM\x01 :: Health Bonus] \x05%i\x01/\x05%i\x01", iTeamOneBonus, iMaxBonusForMap );
 		// [SM :: Map Bonus] Bonus: 487/1200 
 		new iCurrentCampaignScore = GetConVarInt(hCvarTieBreaker);
@@ -165,7 +167,9 @@ public Action:PrintRoundEndStats(Handle:timer) {
 }
 
 /*************************************************************************************************************
+
 										VERSUS EVENT HOOKS
+										
 *************************************************************************************************************/
 
 public Action:L4D2_OnEndVersusModeRound() { //bool:countSurvivors could possibly be used as a parameter here
@@ -196,44 +200,36 @@ public Action:L4D2_OnEndVersusModeRound() { //bool:countSurvivors could possibly
 }
 
 /*************************************************************************************************************
+										
 										COOP EVENT HOOKS
+										
 *************************************************************************************************************/
+
+public OnMissionLost() {
+	//Get distance points from incapped survivors only
+	//Dead survivor points are added in OnMapTransition()
+	for (new client = 1; client <= MaxClients; client++) {
+		if(IsClientInGame(client) && L4D2_Team:GetClientTeam(client) == L4D2Team_Survivor) {
+			if (IsPlayerAlive(client)) {
+				iTeamDistancePoints += GetSurvivorMapDist(client);
+			}
+		}
+	}
+}
 
 public OnMapTransition() {
 	if (!bInVersusMode) {
 		//Get the health bonus for this map
 		fBonusScore[TEAM_ONE] = CalculateBonusScore();
 		new iBonusEarned = RoundToFloor(fBonusScore[TEAM_ONE]);
-		//Get the distance points				
-		iTeamDistancePoints = 0;
-		decl Float:fThisSurvivorFlow;
-		decl Float:origin[3];
-		decl Address:pNavArea;
-		for (new client = 1; client <= MaxClients; client++) {
-			if(IsClientInGame(client) && L4D2_Team:GetClientTeam(client) == L4D2Team_Survivor) {
-				GetClientAbsOrigin(client, origin);
-				pNavArea = L4D2Direct_GetTerrorNavArea(origin);
-				if (pNavArea != Address_Null) {
-					fThisSurvivorFlow = L4D2Direct_GetTerrorNavAreaFlow(pNavArea);
-					new Float:fDistanceProportion = fThisSurvivorFlow/L4D2Direct_GetMapMaxFlowDistance();
-					new iThisSurvivorDistPoints = RoundToNearest(fDistanceProportion * (fMapDistance/iTeamSize));
-					#if SM_DEBUG
-						new String:ClientName[256];
-						GetClientName(client, ClientName, sizeof(ClientName));
-						PrintToChatAll("\x04Distance covered by %s", ClientName);
-						PrintToChatAll("- flow distance:			\x05%f", fThisSurvivorFlow);
-						PrintToChatAll("- max flow distance:		\x05%f", L4D2Direct_GetMapMaxFlowDistance());
-						PrintToChatAll("- percentage of total flow:	\x05%f", fDistanceProportion);
-						PrintToChatAll("- points: 				\x05%i", iThisSurvivorDistPoints);
-					#endif 
-					iTeamDistancePoints += iThisSurvivorDistPoints;
-				}
-			}
-		}
+		//Get distance points for survivors that have made saferoom				
+		new iNumMadeSaferoom = CountUprightSurvivors();
+		new Float:fProportionOfTeam = (Float:iNumMadeSaferoom)/(Float:iTeamSize);
+		iTeamDistancePoints += RoundToNearest(fProportionOfTeam * iMapDistance);
+		//Add distance points from survivors that have died
+		iTeamDistancePoints += iDeadSurvivorDistPoints;		
+		iCampaignScore += iTeamDistancePoints + iBonusEarned;
 		//Use this convar to save accumulated score in coop; also makes the health bonus available for vscripts to access
-		iCampaignScore += iTeamDistancePoints;
-		iCampaignScore += iDeadSurvivorDistPoints;
-		iCampaignScore += iBonusEarned;
 		SetConVarInt(hCvarTieBreaker, iCampaignScore);
 		// Scores print
 		CreateTimer(0.0, PrintRoundEndStats, _, TIMER_FLAG_NO_MAPCHANGE);
@@ -241,68 +237,46 @@ public OnMapTransition() {
 	} 
 }
 
-public OnFinaleFinish(survivorcount) { //map_transition event does not work for last map in a campaign
+//map_transition event does not work for last map in a campaign
+public OnFinaleFinish(survivorcount) { 
 	if (!bInVersusMode) {
 		//Get the health bonus for this map
 		fBonusScore[TEAM_ONE] = CalculateBonusScore();
 		new iBonusEarned = RoundToFloor(fBonusScore[TEAM_ONE]);
 		//Get the distance points				
-		iTeamDistancePoints = 0;
-		decl Float:fThisSurvivorFlow;
-		decl Float:origin[3];
-		decl Address:pNavArea;
-		for (new client = 1; client <= MaxClients; client++) {
-			if(IsClientInGame(client) && L4D2_Team:GetClientTeam(client) == L4D2Team_Survivor) {
-				GetClientAbsOrigin(client, origin);
-				pNavArea = L4D2Direct_GetTerrorNavArea(origin);
-				if (pNavArea != Address_Null) {
-					fThisSurvivorFlow = L4D2Direct_GetTerrorNavAreaFlow(pNavArea);
-					new iDistancePercentage = RoundToNearest(fThisSurvivorFlow/L4D2Direct_GetMapMaxFlowDistance());
-					new iThisSurvivorDistPoints = RoundToNearest(iDistancePercentage * (fMapDistance/iTeamSize));
-					#if SM_DEBUG
-						new String:ClientName[256];
-						GetClientName(client, ClientName, sizeof(ClientName));
-						PrintToChatAll("Distance points for %s: %i", ClientName, iThisSurvivorDistPoints);
-					#endif 
-					iTeamDistancePoints += iThisSurvivorDistPoints;
-				}
-			}
-		}
+		new iNumMadeSaferoom = CountUprightSurvivors();
+		new Float:fProportionOfTeam = (Float:iNumMadeSaferoom)/(Float:iTeamSize);
+		iTeamDistancePoints += RoundToNearest(fProportionOfTeam * iMapDistance); //points from survivors that made saferoom
+		iTeamDistancePoints += iDeadSurvivorDistPoints;		
+		iCampaignScore += iTeamDistancePoints + iBonusEarned;
 		//Use this convar to save accumulated score in coop; also makes the health bonus available for vscripts to access
-		iCampaignScore += iTeamDistancePoints;
-		iCampaignScore += iDeadSurvivorDistPoints;
-		iCampaignScore += iBonusEarned;
 		SetConVarInt(hCvarTieBreaker, iCampaignScore);
 		// Scores print
 		CreateTimer(0.0, PrintRoundEndStats, _, TIMER_FLAG_NO_MAPCHANGE);
 		bIsRoundOver = true;
-	}
+	} 
 }
 
-public Action:OnPlayerDeath(Handle:event, const String:name[], bool:dontBroadcast) {
-	new iThisClient = GetEventInt(event, "entityid");
-	decl Float:fThisSurvivorFlow;
-	decl Float:origin[3];
-	decl Address:pNavArea;
-	if (IsValidClient(iThisClient) && IsSurvivor(iThisClient)) {
-		GetClientAbsOrigin(iThisClient, origin);
-		pNavArea = L4D2Direct_GetTerrorNavArea(origin);
-		if (pNavArea != Address_Null) {
-			fThisSurvivorFlow = L4D2Direct_GetTerrorNavAreaFlow(pNavArea);
-			new iDistancePercentage = RoundToNearest(fThisSurvivorFlow/L4D2Direct_GetMapMaxFlowDistance());
-			iDeadSurvivorDistPoints += RoundToNearest(iDistancePercentage * (fMapDistance/iTeamSize)); 
-		}
+// Get their distance points before it is lost on death
+public Action:OnPlayerDeath(Handle:event, const String:name[], bool:dontBroadcast) { 
+	new userid = GetEventInt(event, "userid");
+	new client = GetClientOfUserId(userid);
+	if (IsValidClient(client) && IsSurvivor(client)) {
+		iDeadSurvivorDistPoints += GetSurvivorMapDist(client);
 	}	
 }
 
+// reset for new map/survivors wiping
 public OnRoundFreezeEnd() { 
-	iDeadSurvivorDistPoints = 0; // reset for new map/survivors wiping
+	iDeadSurvivorDistPoints = 0; 
 }
 /*************************************************************************************************************
+											
 											PLUGIN COMMANDS
+											
 *************************************************************************************************************/
 
-public Action:CmdScoreInfo(client, args) {
+public Action:CmdScoring(client, args) {
 	PrintToChat(client, "\x03<Health bonus pool - breakdown>");
 	PrintToChat(client, "\x04Permanent health ->\x05 x%f \x01(default 1.5)", GetConVarFloat(hCVarPermHealthMultiplier));
 	PrintToChat(client, "\x01- Held perm health:		\x05100");
@@ -321,13 +295,13 @@ public Action:CmdScoreInfo(client, args) {
 public Action:CmdMapInfo(client, args) {
 	if (client == -1) {
 		PrintToServer("\x01[\x04SM\x01 :: \x03%iv%i\x01] Map Info", iTeamSize, iTeamSize); // [SM :: 4v4] Map Info
-		PrintToServer("\x04Map Distance: \x05%f\x01", fMapDistance);
+		PrintToServer("\x04Map Distance: \x05%i\x01", iMapDistance);
 		PrintToServer("\x04Map Multiplier: \x05%f\x01", GetMapMultiplier()); // Map multiplier
 		PrintToServer("\x04Max bonus for this map: \x05%f", fMaxBonusForMap);
 		PrintToServer("");
 	} else {
 		PrintToChat(client, "\x01[\x04SM\x01 :: \x03%iv%i\x01] Map Info", iTeamSize, iTeamSize); // [SM :: 4v4] Map Info
-		PrintToChat(client, "\x04Map Distance: \x05%f\x01", fMapDistance);
+		PrintToChat(client, "\x04Map Distance: \x05%i\x01", iMapDistance);
 		PrintToChat(client, "\x04Map Multiplier: \x05%f\x01", GetMapMultiplier()); // Map multiplier
 		PrintToChat(client, "\x04Max bonus for this map: \x05%f", fMaxBonusForMap);
 		PrintToChat(client, "");
@@ -338,7 +312,7 @@ public Action:CmdMapInfo(client, args) {
 //For coop
 public Action:CmdSetScore(client, args) {
 	if (bInVersusMode) {
-		PrintToServer("Static Scoremod can only manually set coop bonus points");
+		PrintToServer("Only coop score can be set");
 	} else {
 		new String:arg[32];
 		if (args == 1 && GetCmdArg(1, arg, sizeof(arg))) {			
@@ -386,7 +360,9 @@ public Action:CmdBonus(client, args) { // [SM :: R#1] Bonus: 556
 }
 
 /*************************************************************************************************************
+											
 											HEALTH BONUS CALCULATION
+											
 *************************************************************************************************************/
 
  // Apply map multiplier to the sum of the permanent and temporary health bonuses
@@ -499,13 +475,43 @@ Float:GetTempBonus() {
 Float:GetMapMultiplier() { 
 	new Float:fMaxPermBonus = MAX_HEALTH * GetConVarFloat(hCVarPermHealthMultiplier);
 	new iSurvivorIncapHealth = INCAP_HEALTH * INCAPS_BEFORE_DEATH; // 30 x 2
-	new Float:fMapMultiplier = ( 2 * fMapDistance )/( iTeamSize*(fMaxPermBonus + STARTING_PILL_BONUS + iSurvivorIncapHealth));
+	new Float:fMapMultiplier = ( 2 * iMapDistance )/( iTeamSize*(fMaxPermBonus + STARTING_PILL_BONUS + iSurvivorIncapHealth));
 	return fMapMultiplier;
 }
 
 /*************************************************************************************************************
+											
 											UTILITY FUNCTIONS
+											
 *************************************************************************************************************/
+
+GetSurvivorMapDist(client) {
+	decl Float:fFlowCovered;
+	decl Float:origin[3];
+	decl Address:pNavArea;
+	if(IsClientInGame(client) && L4D2_Team:GetClientTeam(client) == L4D2Team_Survivor) {
+		GetClientAbsOrigin(client, origin);
+		pNavArea = L4D2Direct_GetTerrorNavArea(origin);
+		if (pNavArea != Address_Null) {
+			fFlowCovered = L4D2Direct_GetTerrorNavAreaFlow(pNavArea);
+			new Float:fDistanceProportion = fFlowCovered/L4D2Direct_GetMapMaxFlowDistance();
+			new iThisSurvivorDistPoints = RoundToNearest(fDistanceProportion * (iMapDistance/iTeamSize));
+			// survivors spawning at the back of the saferoom start with negative distance points; give them 0 instead:
+			iThisSurvivorDistPoints = (iThisSurvivorDistPoints > 0 ? iThisSurvivorDistPoints : 0); 
+			#if SM_DEBUG
+				new String:ClientName[256];
+				GetClientName(client, ClientName, sizeof(ClientName));
+				PrintToChatAll("\x04Distance covered by %s:", ClientName);
+				PrintToChatAll("- flow distance:			\x05%f", fFlowCovered);
+				PrintToChatAll("- max flow distance:		\x05%f", L4D2Direct_GetMapMaxFlowDistance());
+				PrintToChatAll("- proportion of total flow:	\x05%f", fDistanceProportion);
+				PrintToChatAll("- map distance points: 		\x05%i", iThisSurvivorDistPoints);
+			#endif 
+			return iThisSurvivorDistPoints;
+		}
+	}
+	return 0; //no distance points found for client
+}
 
 CheckGameMode() 
 {
@@ -534,7 +540,7 @@ CountUprightSurvivors() {
 	return iUprightCount;
 }
 
-stock bool:IsValidClient(iClient) {
+bool:IsValidClient(iClient) {
     return (iClient > 0 && iClient <= MaxClients);
 }
 
