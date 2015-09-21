@@ -24,7 +24,7 @@
 
 #pragma semicolon 1
 
-#define SM_DEBUG 1
+#define SM_DEBUG 0
 #define TEAM_ONE 0
 #define TEAM_TWO 1
 
@@ -84,15 +84,16 @@ public OnPluginStart() {
 	HookEvent("round_start", EventHook:OnRoundStart, EventHookMode_PostNoCopy); 
 	HookEvent("pills_used", EventHook:OnPillsUsed, EventHookMode_PostNoCopy);
 	//for coop
-	HookEvent("map_transition", EventHook:OnMapTransition, EventHookMode_Pre); 
+	HookEvent("map_transition", OnMapTransition, EventHookMode_Pre); 
 	HookEvent("mission_lost", EventHook:OnMissionLost, EventHookMode_Pre);
 	HookEvent("finale_win", EventHook:OnFinaleFinish, EventHookMode_PostNoCopy); //when map_transition cannot be used	
 	HookEvent("player_death", OnPlayerDeath, EventHookMode_Pre); // retrieve distance points before players die
 	HookEvent("round_freeze_end", EventHook:OnRoundFreezeEnd, EventHookMode_PostNoCopy); // reset coop round stats
 	
 	//In-game "sm_/!" prefixed commands to call CmdBonus() function
-	RegConsoleCmd("sm_health", CmdBonus);
-	RegConsoleCmd("sm_bonus", CmdBonus);
+	RegConsoleCmd("sm_score", CmdScore);
+	RegConsoleCmd("sm_health", CmdScore);
+	RegConsoleCmd("sm_bonus", CmdScore);
 	//Map multiplier info, etc.
 	RegConsoleCmd("sm_scoring", CmdScoring);
 	RegConsoleCmd("sm_mapinfo", CmdMapInfo);
@@ -119,7 +120,7 @@ public OnConfigsExecuted() {
 
 public OnRoundStart() {
 	if (!bInVersusMode) {
-		CreateTimer(5.0, Timer_SetCampaignScore, _, TIMER_FLAG_NO_MAPCHANGE);
+		CreateTimer(5.0, Timer_PostRoundStart, _, TIMER_FLAG_NO_MAPCHANGE);
 	}
 	CheckGameMode(); //gamemode is assumed to be non-versus; checks otherwise
 	bInSecondHalf = bool:GameRules_GetProp("m_bInSecondHalfOfRound"); //of a versus map
@@ -128,8 +129,15 @@ public OnRoundStart() {
 	bIsRoundOver = false;
 }
 
-public Action:Timer_SetCampaignScore(Handle:timer) {
-	SetConVarInt(hCvarTieBreaker, iCampaignScore);
+public Action:Timer_PostRoundStart(Handle:timer) {
+	// Set campaign score
+	//SetConVarInt(hCvarTieBreaker, iCampaignScore);
+	
+}
+
+public Action:L4D_OnFirstSurvivorLeftSafeArea(client) {
+	// Print scoremod information
+	PrintToChatAll("\x04Type \x03!scoring \x04for scoremod info, \x03!setscore \x04to manually adjust the score");
 }
 
 public OnPillsUsed() {
@@ -145,10 +153,15 @@ public CvarChanged(Handle:convar, const String:oldValue[], const String:newValue
 	OnConfigsExecuted(); //re-adjust if survivor_limit, perm health multiplier etc. are changed mid game
 }
 
-public Action:PrintRoundEndStats(Handle:timer) {
+public Action:Timer_PrintScore(Handle:timer) {
+	PrintScore();
+}
+
+PrintScore() {
 	new iMaxBonusForMap = RoundToFloor(fMaxBonusForMap);
 	new iTeamOneBonus = RoundToFloor(fBonusScore[TEAM_ONE]);
 	new iTeamTwoBonus = RoundToFloor(fBonusScore[TEAM_TWO]);
+	
 	if (bInVersusMode) {
 		if (bInSecondHalf == false) {
 			PrintToChatAll("\x01[\x04SM\x01 :: Round \x031\x01] Bonus: \x05%i\x01/\x05%i\x01", iTeamOneBonus, iMaxBonusForMap);
@@ -158,11 +171,10 @@ public Action:PrintRoundEndStats(Handle:timer) {
 			// [SM :: Round 2] Bonus: 487/1200 
 		}
 	} else { //print map score, and total points earned so far in this campaign
-		PrintToChatAll("\x01[\x04SM\x01 :: Distance Points] \x05%i\x01/\x05%i\x01", iTeamDistancePoints, iMapDistance);
-		PrintToChatAll("\x01[\x04SM\x01 :: Health Bonus] \x05%i\x01/\x05%i\x01", iTeamOneBonus, iMaxBonusForMap );
 		// [SM :: Map Bonus] Bonus: 487/1200 
-		new iCurrentCampaignScore = GetConVarInt(hCvarTieBreaker);
-		PrintToChatAll("\x01[\x04SM\x01 :: Campaign Score] \x05%i", iCurrentCampaignScore);
+		PrintToChatAll("\x01[\x04SM\x01 :: Distance Points] \x05%i/%i", iTeamDistancePoints, iMapDistance);
+		PrintToChatAll("\x01[\x04SM\x01 :: Health Bonus] \x05%i/%i", iTeamOneBonus, iMaxBonusForMap);
+		PrintToChatAll("\x01[\x04SM\x01 :: Campaign Score] \x05%i", iCampaignScore);
 	}	
 }
 
@@ -193,7 +205,7 @@ public Action:L4D2_OnEndVersusModeRound() { //bool:countSurvivors could possibly
 		//Set score (awarded on a per survivor basis -> divide calculated bonus by number of standing survivors)
 		SetConVarInt(hCvarSurvivalBonus, RoundToFloor(fBonusScore[team]/iSurvivalMultiplier) );
 		// Scores print
-		CreateTimer(3.0, PrintRoundEndStats, _, TIMER_FLAG_NO_MAPCHANGE);
+		CreateTimer(3.0, Timer_PrintScore, _, TIMER_FLAG_NO_MAPCHANGE);
 		bIsRoundOver = true;
 	}	
 	return Plugin_Continue;
@@ -217,42 +229,53 @@ public OnMissionLost() {
 	}
 }
 
-public OnMapTransition() {
+public Action:OnMapTransition(Handle:event, const String:eventName[], bool:dontBroadcast) {
 	if (!bInVersusMode) {
 		//Get the health bonus for this map
 		fBonusScore[TEAM_ONE] = CalculateBonusScore();
 		new iBonusEarned = RoundToFloor(fBonusScore[TEAM_ONE]);
+		
 		//Get distance points for survivors that have made saferoom				
 		new iNumMadeSaferoom = CountUprightSurvivors();
-		new Float:fProportionOfTeam = (Float:iNumMadeSaferoom)/(Float:iTeamSize);
+		new Float:fProportionOfTeam = float(iNumMadeSaferoom)/float(iTeamSize);
 		iTeamDistancePoints += RoundToNearest(fProportionOfTeam * iMapDistance);
+		
 		//Add distance points from survivors that have died
 		iTeamDistancePoints += iDeadSurvivorDistPoints;		
-		iCampaignScore += iTeamDistancePoints + iBonusEarned;
+		iCampaignScore += iTeamDistancePoints; 
+		iCampaignScore += iBonusEarned;
+		
 		//Use this convar to save accumulated score in coop; also makes the health bonus available for vscripts to access
-		SetConVarInt(hCvarTieBreaker, iCampaignScore);
+		//SetConVarInt(hCvarTieBreaker, iCampaignScore);
+		
 		// Scores print
-		CreateTimer(0.0, PrintRoundEndStats, _, TIMER_FLAG_NO_MAPCHANGE);
+		PrintScore();
+		
+		// Check if Mapskipper.smx is indicating score needs to be reset
+		if (GetEventBool(event, "finale")) {
+			LogMessage("Finale finished, resetting score");
+			iCampaignScore = 0;
+		}
 		bIsRoundOver = true;
 	} 
 }
 
 //map_transition event does not work for last map in a campaign
-public OnFinaleFinish(survivorcount) { 
+public OnFinaleFinish() { 
 	if (!bInVersusMode) {
 		//Get the health bonus for this map
 		fBonusScore[TEAM_ONE] = CalculateBonusScore();
 		new iBonusEarned = RoundToFloor(fBonusScore[TEAM_ONE]);
 		//Get the distance points				
 		new iNumMadeSaferoom = CountUprightSurvivors();
-		new Float:fProportionOfTeam = (Float:iNumMadeSaferoom)/(Float:iTeamSize);
+		new Float:fProportionOfTeam = float(iNumMadeSaferoom)/float(iTeamSize);
 		iTeamDistancePoints += RoundToNearest(fProportionOfTeam * iMapDistance); //points from survivors that made saferoom
 		iTeamDistancePoints += iDeadSurvivorDistPoints;		
 		iCampaignScore += iTeamDistancePoints + iBonusEarned;
 		//Use this convar to save accumulated score in coop; also makes the health bonus available for vscripts to access
-		SetConVarInt(hCvarTieBreaker, iCampaignScore);
+		//SetConVarInt(hCvarTieBreaker, iCampaignScore);
 		// Scores print
-		CreateTimer(0.0, PrintRoundEndStats, _, TIMER_FLAG_NO_MAPCHANGE);
+		PrintScore();
 		bIsRoundOver = true;
 	} 
 }
@@ -270,6 +293,7 @@ public Action:OnPlayerDeath(Handle:event, const String:name[], bool:dontBroadcas
 public OnRoundFreezeEnd() { 
 	iDeadSurvivorDistPoints = 0; 
 }
+
 /*************************************************************************************************************
 											
 											PLUGIN COMMANDS
@@ -286,14 +310,13 @@ public Action:CmdScoring(client, args) {
 	PrintToChat(client, "\x01- Incap Avoidance bonus:	\x05 30 per incap avoided \x01(2 max incaps per survivor)");
 	PrintToChat(client, "\x03Each survivor contributes 100*1.5 + 50 + 60 =\x05 260 \x01bonus");
 	PrintToChat(client, "\x03 -> total 4v4 \x04starting bonus \x03of 4x260 =\x05 1040 \x01(before map multiplier)");
-	PrintToChat(client, "\x04The only purpose of scavenged pills is to keep a team fast");
-	PrintToChat(client, "\x04So temporary health from the fifth pill consumed onwards does not convert into bonus");
+	PrintToChat(client, "\x04Only temporary health gained from eating the starting set of pills will convert into bonus");
 	PrintToChat(client, "");
 	return Plugin_Handled;
 }
 
 public Action:CmdMapInfo(client, args) {
-	if (client == -1) {
+	if (client <= 0) {
 		PrintToServer("\x01[\x04SM\x01 :: \x03%iv%i\x01] Map Info", iTeamSize, iTeamSize); // [SM :: 4v4] Map Info
 		PrintToServer("\x04Map Distance: \x05%i\x01", iMapDistance);
 		PrintToServer("\x04Map Multiplier: \x05%f\x01", GetMapMultiplier()); // Map multiplier
@@ -312,12 +335,12 @@ public Action:CmdMapInfo(client, args) {
 //For coop
 public Action:CmdSetScore(client, args) {
 	if (bInVersusMode) {
-		PrintToServer("Only coop score can be set");
+		PrintToServer("Score can only be set in coop");
 	} else {
 		new String:arg[32];
 		if (args == 1 && GetCmdArg(1, arg, sizeof(arg))) {			
 			iCampaignScore = StringToInt(arg); // the bonus value to be set
-			SetConVarInt(hCvarTieBreaker, iCampaignScore);
+			//SetConVarInt(hCvarTieBreaker, iCampaignScore);
 			PrintToChatAll("Campaign score set to %i", iCampaignScore);
 		} else {
 			PrintToChat(client, "Must input a valid score value");
@@ -325,34 +348,40 @@ public Action:CmdSetScore(client, args) {
 	}	
 }
 
-public Action:CmdBonus(client, args) { // [SM :: R#1] Bonus: 556
+public Action:CmdScore(client, args) { // [SM :: R#1] Bonus: 556
+
 	#if SM_DEBUG
 		PrintToChatAll("CmdBonus()");
 	#endif
+	
 	if (bIsRoundOver) {
+		
 		#if SM_DEBUG
 			if (bIsRoundOver) {
 				PrintToChatAll("bIsRoundOver: true ");
 			}				
 		#endif
 		return Plugin_Handled;
+		
 	} else {
-		new Float:fBonus = CalculateBonusScore();	
-		new iBonus = RoundToFloor(fBonus);
+		new iMaxBonusForMap = RoundToFloor(fMaxBonusForMap);
+		new iBonus = RoundToFloor(CalculateBonusScore());
 		new bool:bIsSilentCommand = (client > 0 ? false : true); //sm_command instead of !command chat trigger?
 		if (!bInVersusMode) { //print without a round number
 			if (bIsSilentCommand) { 
-				PrintToServer("\x01[\x04SM\x01 :: Map Bonus] \x05%d\x01", iBonus);
+				PrintToServer("\x01[\x04SM\x01 :: Health Bonus] \x05%d/%d\x01", iBonus, iMaxBonusForMap);
+				PrintToServer("\x01[\x04SM\x01 :: Campaign Score] \x05%d\x01", iCampaignScore);
 			} else {
-				PrintToChat(client, "\x01[\x04SM\x01 :: Map Bonus] \x05%d\x01", iBonus);
+				PrintToChat(client, "\x01[\x04SM\x01 :: Health Bonus] \x05%d/%d\x01", iBonus, iMaxBonusForMap);
+				PrintToChat(client, "\x01[\x04SM\x01 :: Campaign Score] \x05%d\x01", iCampaignScore);
 			}			
 		} else {
 			//boolean values are stored as '0' for false or '1' for true
 			new iRoundNum = _:(bInSecondHalf) + 1;
 			if (bIsSilentCommand) { 
-				PrintToServer("\x01[\x04SM\x01 :: R\x03#%i\x01] Bonus: \x05%d\x01", iRoundNum, iBonus);
+				PrintToServer("\x01[\x04SM\x01 :: R\x03#%i\x01] Bonus: \x05%d/%d\x01", iRoundNum, iBonus, iMaxBonusForMap);
 			} else {
-				PrintToChat(client, "\x01[\x04SM\x01 :: R\x03#%i\x01] Bonus: \x05%d\x01", iRoundNum,iBonus);
+				PrintToChat(client, "\x01[\x04SM\x01 :: R\x03#%i\x01] Bonus: \x05%d/%d\x01", iRoundNum, iBonus, iMaxBonusForMap);
 			}	
 		}
 		return Plugin_Continue;
@@ -367,21 +396,22 @@ public Action:CmdBonus(client, args) { // [SM :: R#1] Bonus: 556
 
  // Apply map multiplier to the sum of the permanent and temporary health bonuses
 Float:CalculateBonusScore() {
-	#if SM_DEBUG
-		PrintToChatAll("\x03CalculateBonusScore()");
-	#endif
+	
 	if (CountUprightSurvivors() == 0) { return 0.0; } //wiped; no bonus
 	new Float:fPermBonus = GetPermBonus();
 	new Float:fTempBonus = GetTempBonus();
 	new Float:fMapMultiplier = GetMapMultiplier();
 	new Float:fHealth = fPermBonus + fTempBonus;
 	new Float:fHealthBonus = fHealth * fMapMultiplier;
+	
 	#if SM_DEBUG
+		PrintToChatAll("\x03CalculateBonusScore()");
 		PrintToChatAll("\x04Total health pool: \x05%f", fHealth);
 		PrintToChatAll("\x04MapMultiplier: \x05%f", fMapMultiplier);
 		PrintToChatAll("\x03-> HealthBonus: \x05%f", fHealthBonus);
 		PrintToChatAll(" ");
 	#endif
+	
 	return fHealthBonus;
 }
 
@@ -392,25 +422,32 @@ Float:GetPermBonus() {
 		PrintToChatAll("\x04GetPermBonus()");
 		PrintToChatAll( "Permanent Health Multiplier: \x05%f", GetConVarFloat(hCVarPermHealthMultiplier) );
 	#endif
-	for (new client = 1; client < MaxClients; client++)
-	{
+	for (new client = 1; client < MaxClients; client++) {
+		
 		//Add permanent health held by each non-incapped survivor
 		if (IsSurvivor(client) && IsPlayerAlive(client) && !IsPlayerIncap(client) ) { 
-			if (GetEntProp(client, Prop_Send, "m_currentReviveCount") == 0 ) { //
+			
+			if (GetEntProp(client, Prop_Send, "m_currentReviveCount") == 0 ) {
+				
 				if (GetEntProp(client, Prop_Send, "m_iHealth") > 0) {
 					new iThisSurvivorsPermHealth = GetEntProp(client, Prop_Send, "m_iHealth");
 					iPermHealthPool += iThisSurvivorsPermHealth;
+					
 					#if SM_DEBUG
 						PrintToChatAll("- Found a survivor with \x05%d \x04perm health", iThisSurvivorsPermHealth);
 					#endif
+					
 				} 
 			}
 		}
 	}		
+	
 	new Float:fPermHealthBonus = iPermHealthPool * GetConVarFloat(hCVarPermHealthMultiplier);
+
 	#if SM_DEBUG
 		PrintToChatAll("\x03'Permanent Health' Bonus = \x05%f", fPermHealthBonus);
 	#endif
+	
 	return (fPermHealthBonus > 0 ? fPermHealthBonus: 0.0);
 }
 
@@ -424,36 +461,55 @@ Float:GetTempBonus() {
 	#if SM_DEBUG
 		PrintToChatAll("\x04GetTempBonus()");
 	#endif
+	
 	new iTempHealthPool = 0; //the team's collective temp health pool
 	new iIncapsSuffered = 0; 
 	for (new client = 1; client < MaxClients; client++) {
-		if (IsSurvivor(client) && !IsPlayerIncap(client)) { //incapped survivors are granted 300 temp health until revival			
-			if (IsPlayerAlive(client)) { //count incaps, add temp health to pool
+		
+		if (IsSurvivor(client) && !IsPlayerIncap(client)) { //incapped survivors are granted 300 temp health until revival	
+		
+			if (IsPlayerAlive(client)) { 				
+				//count incaps, add temp health to pool
 				iIncapsSuffered += GetEntProp(client, Prop_Send, "m_currentReviveCount"); 
 				new iThisSurvivorsTempHealth = RoundToCeil(GetEntPropFloat(client, Prop_Send, "m_healthBuffer") - ((GetGameTime() - GetEntPropFloat(client, Prop_Send, "m_healthBufferTime")) * GetConVarFloat(FindConVar("pain_pills_decay_rate")))) - 1;
+				
 				if (iThisSurvivorsTempHealth > 0) {
 					//Add temp health held by each survivor
 					iTempHealthPool += iThisSurvivorsTempHealth;
+					
 					#if SM_DEBUG
 						PrintToChatAll("- Found a survivor with \x05%i \x04temp health", iThisSurvivorsTempHealth);
-					#endif				
-				} else {
+					#endif		
+						
+				} 
+				
+				else {
+					
 					#if SM_DEBUG
 						PrintToChatAll("- Found a survivor with no temp health");
 					#endif
-				}			
-			} else { //dead survivor, penalise for 2 incaps 
-				iIncapsSuffered += INCAPS_BEFORE_DEATH;
+					
+				}		
+				
+			} 
+			
+			//dead survivor, penalise for 2 incaps 
+			else { 
+				iIncapsSuffered += INCAPS_BEFORE_DEATH;	
+				
 				#if SM_DEBUG
 					PrintToChatAll("- Found a dead survivor");
 				#endif
+				
 			}			
 		}
 	}	
-	#if SM_DEBUG
-		PrintToChatAll("\x03'Temporary Health' Bonus =");
-		PrintToChatAll("\x04+ temp health held: \x05%i", iTempHealthPool);
-	#endif
+	
+			#if SM_DEBUG
+				PrintToChatAll("\x03'Temporary Health' Bonus =");
+				PrintToChatAll("\x04+ temp health held: \x05%i", iTempHealthPool);
+			#endif
+	
 	new iStartingPillBonus = STARTING_PILL_BONUS * iTeamSize;
 	new iPillConsumptionPenalty = iPillsConsumed * PILL_CONSUMPTION_PENALTY;
 	new iIncapsAvoided = (INCAPS_BEFORE_DEATH * iTeamSize) - iIncapsSuffered;
@@ -462,12 +518,14 @@ Float:GetTempBonus() {
 	iTempHealthPool += iIncapAvoidanceBonus;
 	iTempHealthPool -= iPillConsumptionPenalty;
 	new Float:fTempHealthBonus = float(iTempHealthPool * TEMP_HEALTH_MULTIPLIER); // x1
-	#if SM_DEBUG
-		PrintToChatAll("\x04+ Starting Pill Bonus: \x05%i", iStartingPillBonus);
-		PrintToChatAll("\x04+ Incap Avoidance Bonus: \x05%i", iIncapAvoidanceBonus);
-		PrintToChatAll("\x04- Pill Consumption Penalty: \x05%i", iPillConsumptionPenalty);
-		PrintToChatAll("\x03= \x05%f", fTempHealthBonus);
-	#endif
+	
+			#if SM_DEBUG
+				PrintToChatAll("\x04+ Starting Pill Bonus: \x05%i", iStartingPillBonus);
+				PrintToChatAll("\x04+ Incap Avoidance Bonus: \x05%i", iIncapAvoidanceBonus);
+				PrintToChatAll("\x04- Pill Consumption Penalty: \x05%i", iPillConsumptionPenalty);
+				PrintToChatAll("\x03= \x05%f", fTempHealthBonus);
+			#endif
+	
 	return (fTempHealthBonus > 0 ? fTempHealthBonus : 0.0);
 }
 
@@ -510,7 +568,7 @@ GetSurvivorMapDist(client) {
 			return iThisSurvivorDistPoints;
 		}
 	}
-	return 0; //no distance points found for client
+	return 0; // no distance points found for client
 }
 
 CheckGameMode() 
