@@ -19,3 +19,4 @@ Takes into account permanent health, temporary health, pill consumption and inca
  * **sm_scoring/!scoring** for information on how the score system works    
  * **sm_mapinfo/!mapinfo** for map distance and multiplier information    
  * **sm_(bonus/health/score)/!bonus/!health/!score** for the current round's health bonus  
+
