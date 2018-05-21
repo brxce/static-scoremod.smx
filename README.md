@@ -6,7 +6,7 @@ Takes into account permanent health, temporary health, pill consumption and inca
 > #### Health Bonus pool =   
 +Permanent health * 1.5 (configurable multiplier)  
 +Temporary health * 1 (unit multiplier)   
- * ** held temporary health **
+ * **held temporary health**  
  * bonus pool for **avoiding incaps**: 'x' survivors * 2 max incaps * 30 temp hp/incap (240 in 4 player team)   
    - from which a 30 point penalty is deducted for every incap 
  * bonus pool for **preserving pills from the starting set**:  'x' survivors * 50 temp hp/pill = x * 50 (200 in 4 player team)
